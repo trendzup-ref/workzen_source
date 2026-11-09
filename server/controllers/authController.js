@@ -111,8 +111,15 @@ export const verifyEmail = async (req, res) => {
 
     const user = await User.findOne({ email: email.trim().toLowerCase() })
       .select('+emailVerificationCode +emailVerificationExpiresAt +emailVerificationAttempts');
-    if (!user || user.status === 'terminated' || user.emailVerified || !user.emailVerificationCode ||
-      !user.emailVerificationExpiresAt || user.emailVerificationExpiresAt <= new Date()) {
+    const invalidCodeReason = !user ? 'account_not_found'
+      : user.status === 'terminated' ? 'account_terminated'
+        : user.emailVerified ? 'already_verified'
+          : !user.emailVerificationCode ? 'code_not_stored'
+            : !user.emailVerificationExpiresAt ? 'expiration_not_stored'
+              : user.emailVerificationExpiresAt <= new Date() ? 'code_expired'
+                : null;
+    if (invalidCodeReason) {
+      console.warn('Email verification code rejected:', { reason: invalidCodeReason });
       return res.status(400).json({ success: false, message: 'The verification code is invalid or expired. Request a new code.' });
     }
 
