@@ -1,24 +1,23 @@
+
 import { createHash, randomInt } from 'node:crypto';
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
 const CODE_EXPIRATION_MINUTES = 10;
 
 const getEmailSettings = () => {
-  const SMTP_HOST = (process.env.SMTP_HOST || 'smtp.gmail.com').trim();
-  const SMTP_PORT = (process.env.SMTP_PORT || '465').trim();
-  const SMTP_SECURE = (process.env.SMTP_SECURE || 'true').trim().toLowerCase() === 'true';
-  const SMTP_USER = process.env.SMTP_USER?.trim();
-  const SMTP_PASS = process.env.SMTP_PASS?.replace(/\s/g, '');
-  const EMAIL_FROM = process.env.EMAIL_FROM?.trim() || SMTP_USER;
+  const API_KEY = process.env.RESEND_API_KEY?.trim();
+  const EMAIL_FROM =
+    process.env.EMAIL_FROM?.trim() || 'onboarding@resend.dev';
 
   const missingSettings = [
-    !SMTP_USER && 'SMTP_USER',
-    !SMTP_PASS && 'SMTP_PASS',
-    !EMAIL_FROM && 'EMAIL_FROM (or SMTP_USER)',
+    !API_KEY && 'RESEND_API_KEY',
   ].filter(Boolean);
 
   return {
-    settings: { SMTP_HOST, SMTP_PORT: Number(SMTP_PORT), SMTP_SECURE, SMTP_USER, SMTP_PASS, EMAIL_FROM },
+    settings: {
+      API_KEY,
+      EMAIL_FROM,
+    },
     missingSettings,
   };
 };
@@ -28,7 +27,9 @@ export const isEmailVerificationConfigured = () =>
 
 export const createEmailVerificationCode = () => ({
   code: String(randomInt(100000, 1000000)),
-  expiresAt: new Date(Date.now() + CODE_EXPIRATION_MINUTES * 60 * 1000),
+  expiresAt: new Date(
+    Date.now() + CODE_EXPIRATION_MINUTES * 60 * 1000
+  ),
 });
 
 export const hashEmailVerificationCode = (code) =>
@@ -39,36 +40,40 @@ export const sendEmailVerificationCode = async (email, code) => {
 
   if (missingSettings.length) {
     throw new Error(
-      `Email verification is not configured. Set ${missingSettings.join(' and ')} in the backend environment. ` +
-      'For local development, use server/.env; for a hosted deployment, set them in the backend service settings and restart or redeploy.'
+      `Email verification is not configured. Set ${missingSettings.join(' and ')} in Render environment variables.`
     );
   }
 
-  const transporter = nodemailer.createTransport({
-    host: settings.SMTP_HOST,
-    port: settings.SMTP_PORT,
-    secure: settings.SMTP_SECURE,
-    auth: {
-      user: settings.SMTP_USER,
-      pass: settings.SMTP_PASS,
-    },
-  });
+  const resend = new Resend(settings.API_KEY);
 
   try {
-    await transporter.sendMail({
+    const { data, error } = await resend.emails.send({
       from: settings.EMAIL_FROM,
       to: email,
       subject: 'Your Workzen verification code',
       text: `Your Workzen verification code is ${code}. It expires in ${CODE_EXPIRATION_MINUTES} minutes.`,
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px;">
+          <h2>Workzen Verification</h2>
+          <p>Your verification code is:</p>
+          <h1 style="letter-spacing: 5px;">${code}</h1>
+          <p>This code expires in ${CODE_EXPIRATION_MINUTES} minutes.</p>
+          <p>If you did not request this code, please ignore this email.</p>
+        </div>
+      `,
     });
+
+    if (error) {
+      console.error('Resend email delivery error:', error);
+      throw new Error('Resend email delivery failed');
+    }
+
+    console.log('Verification email accepted:', data?.id);
+
+    return data;
+
   } catch (error) {
-    console.error('SMTP email delivery failed:', {
-      code: error.code,
-      responseCode: error.responseCode,
-      command: error.command,
-    });
-    throw new Error('Email delivery failed. Check your SMTP settings and Gmail App Password.');
-  } finally {
-    transporter.close();
+    console.error('Email delivery failed:', error.message);
+    throw new Error('Email delivery failed. Check your Resend API configuration.');
   }
 };
